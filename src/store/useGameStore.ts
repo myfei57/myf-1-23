@@ -145,22 +145,54 @@ export const useGameStore = create<Store>()(
         }));
       },
 
-      repairRobot: (robotId) => {
+      repairRobot: (robotId, targetRestore) => {
         const state = get();
         const robot = state.robots.find((r) => r.id === robotId);
-        if (!robot) return { success: false, cost: 0, restored: 0 };
+        if (!robot) {
+          return {
+            success: false,
+            cost: 0,
+            targetRestored: 0,
+            restored: 0,
+            failureReason: '机器人不存在',
+          };
+        }
 
         const { repairRules } = state.config;
-        
+
         if (robot.repairCount >= repairRules.maxRepairs) {
-          return { success: false, cost: 0, restored: 0 };
+          return {
+            success: false,
+            cost: 0,
+            targetRestored: 0,
+            restored: 0,
+            failureReason: '已达返修上限',
+          };
         }
 
         const durabilityNeeded = robot.maxDurability - robot.durability;
-        const cost = durabilityNeeded * repairRules.materialCostPerPoint;
+        const clampedTarget = clamp(targetRestore, 0, durabilityNeeded);
+
+        if (clampedTarget <= 0) {
+          return {
+            success: false,
+            cost: 0,
+            targetRestored: 0,
+            restored: 0,
+            failureReason: '目标恢复值无效',
+          };
+        }
+
+        const cost = clampedTarget * repairRules.materialCostPerPoint;
 
         if (!state.spendMaterials(cost)) {
-          return { success: false, cost, restored: 0 };
+          return {
+            success: false,
+            cost,
+            targetRestored: clampedTarget,
+            restored: 0,
+            failureReason: '材料不足',
+          };
         }
 
         const successRate = clamp(
@@ -171,13 +203,15 @@ export const useGameStore = create<Store>()(
         const success = Math.random() < successRate;
 
         let restored = 0;
+        let failureReason: string | undefined;
         if (success) {
-          restored = durabilityNeeded;
+          restored = clampedTarget;
           state.updateRobot(robotId, {
-            durability: robot.maxDurability,
+            durability: clamp(robot.durability + clampedTarget, 0, robot.maxDurability),
             repairCount: robot.repairCount + 1,
           });
         } else {
+          failureReason = '维修失败（成功率判定未通过）';
           state.updateRobot(robotId, {
             repairCount: robot.repairCount + 1,
           });
@@ -189,12 +223,14 @@ export const useGameStore = create<Store>()(
           robotName: robot.name,
           materialCost: cost,
           success,
+          targetRestored: clampedTarget,
           durabilityRestored: restored,
+          failureReason,
           repairedAt: Date.now(),
         };
         state.addRepairRecord(record);
 
-        return { success, cost, restored };
+        return { success, cost, targetRestored: clampedTarget, restored, failureReason };
       },
 
       executeMission: (robotId, missionId) => {
